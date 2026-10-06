@@ -4,70 +4,73 @@ import com.example.matchingengine.domain.Order;
 import com.example.matchingengine.domain.Side;
 import com.example.matchingengine.domain.Trade;
 import com.example.matchingengine.exception.InvalidOrderException;
-import org.springframework.stereotype.Service;
-import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-
-@Service
+/**
+ * Core matching engine managing multiple {@link OrderBook}s (one per symbol).
+ *
+ * <p><strong>Thread-safety:</strong> Concurrent submissions for <em>different</em>
+ * symbols proceed in parallel. Submissions for the <em>same</em> symbol are
+ * serialised via a per-{@code OrderBook} intrinsic lock.</p>
+ *
+ * <p>This class has <strong>no Spring dependencies</strong> and can be tested
+ * without an application context.</p>
+ */
 public class MatchingEngine {
-    
-    private final Map<String, OrderBook> orderBooks;
-    
-    public MatchingEngine() {
-        this.orderBooks = new ConcurrentHashMap<>();
+
+    private final Map<String, OrderBook> orderBooks = new ConcurrentHashMap<>();
+    private final Set<Long> knownOrderIds = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Submits an order for matching.
+     *
+     * @param order the order to process
+     * @return trades generated from matching (may be empty)
+     * @throws InvalidOrderException if the order ID is a duplicate
+     */
+    public List<Trade> submitOrder(Order order) {
+        if (!knownOrderIds.add(order.getId())) {
+            throw new InvalidOrderException("Duplicate order ID: " + order.getId());
+        }
+
+        OrderBook book = orderBooks.computeIfAbsent(order.getSymbol(), OrderBook::new);
+        synchronized (book) {
+            return book.addOrder(order);
+        }
     }
 
     /**
-     * Submits an order to the matching engine.
-     * Reactively returns the list of trades resulting from this order.
-     * 
-     * @param order the order to be processed
-     * @return a Mono emitting a list of trades resulting from this order
-     * @throws InvalidOrderException if the order is invalid (e.g. duplicate ID, negative price, etc.)
+     * Cancels an existing resting order.
+     *
+     * @param symbol instrument symbol
+     * @param orderId order to cancel
+     * @param side    expected side of the order
+     * @return true if the order was found and cancelled
      */
-    public Mono<List<Trade>> submitOrder(Order order) {
-        return Mono.fromCallable(() -> {
-            validateOrder(order);
-            
-            OrderBook orderBook = orderBooks.computeIfAbsent(order.getSymbol(), OrderBook::new);
-            
-            // Note: Since this is a core engine, we synchronize access per OrderBook 
-            // to ensure deterministic sequential processing of the matching logic.
-            synchronized (orderBook) {
-                return orderBook.addOrder(order);
+    public boolean cancelOrder(String symbol, long orderId, Side side) {
+        OrderBook book = orderBooks.get(symbol);
+        if (book == null) return false;
+
+        synchronized (book) {
+            boolean cancelled = book.cancelOrder(orderId, side);
+            if (cancelled) {
+                knownOrderIds.remove(orderId);
             }
-        });
+            return cancelled;
+        }
     }
 
-    /**
-     * Cancels an existing order.
-     * 
-     * @param symbol the symbol of the orderbook
-     * @param orderId the order to cancel
-     * @param side the side of the order
-     * @return a Mono emitting true if successfully cancelled, false if not found
-     */
-    public Mono<Boolean> cancelOrder(String symbol, long orderId, Side side) {
-        return Mono.fromCallable(() -> {
-            OrderBook orderBook = orderBooks.get(symbol);
-            if (orderBook != null) {
-                synchronized (orderBook) {
-                    return orderBook.cancelOrder(orderId, side);
-                }
-            }
-            return false;
-        });
-    }
-
-    private void validateOrder(Order order) {
-        // Validation for price, quantity, etc. is already handled in the Order constructor.
-    }
-    
+    /** Returns the order book for a symbol, or null if none exists. */
     public OrderBook getOrderBook(String symbol) {
         return orderBooks.get(symbol);
+    }
+
+    /** Checks whether an order ID has been seen by this engine. */
+    public boolean hasOrder(long orderId) {
+        return knownOrderIds.contains(orderId);
     }
 }

@@ -1,0 +1,18 @@
+# Test profile — uses H2 in-memory, no Kafka/Redis
+spring:
+  r2dbc:
+    url: r2dbc:h2:mem:///testdb
+    username: sa
+    password:
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
+
+matching-engine:
+  kafka:
+    enabled: false
+  redis:
+    enabled: false

@@ -1,0 +1,33 @@
+server:
+  port: 8080
+
+spring:
+  r2dbc:
+    url: r2dbc:postgresql://localhost:5432/matching_engine
+    username: postgres
+    password: postgres
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  kafka:
+    bootstrap-servers: localhost:9092
+
+# ─── Application Settings ───
+matching-engine:
+  # Fixed-point price scale: 100 means 2 decimal places.
+  # Example: price 35120.50 → stored as 3512050
+  price-scale: 100
+
+  kafka:
+    enabled: true
+    inbound-topic: orders.inbound
+    outbound-topic: trades.outbound
+    consumer-group: matching-engine
+
+  redis:
+    enabled: true
+    # Daily event logs kept in Redis for this many days
+    event-log-ttl-days: 7

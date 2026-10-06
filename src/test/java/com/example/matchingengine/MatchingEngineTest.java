@@ -5,14 +5,21 @@ import com.example.matchingengine.domain.OrderType;
 import com.example.matchingengine.domain.Side;
 import com.example.matchingengine.domain.Trade;
 import com.example.matchingengine.engine.MatchingEngine;
+import com.example.matchingengine.exception.InvalidOrderException;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import reactor.test.StepVerifier;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * Unit tests for the core {@link MatchingEngine} (no Spring context).
+ *
+ * <p>Focuses on engine-level concerns: duplicate ID protection,
+ * multi-symbol isolation, and correct delegation to {@code OrderBook}.</p>
+ */
 class MatchingEngineTest {
 
     private MatchingEngine engine;
@@ -24,151 +31,133 @@ class MatchingEngineTest {
         idGenerator = 1;
     }
 
-    private Order createBuyOrder(String symbol, long price, long quantity) {
-        return new Order(idGenerator++, symbol, Side.BUY, OrderType.LIMIT, price, quantity, System.nanoTime());
+    private Order buy(String symbol, long price, long qty) {
+        return new Order(idGenerator++, symbol, Side.BUY, OrderType.LIMIT, price, qty, System.nanoTime());
     }
 
-    private Order createSellOrder(String symbol, long price, long quantity) {
-        return new Order(idGenerator++, symbol, Side.SELL, OrderType.LIMIT, price, quantity, System.nanoTime());
+    private Order sell(String symbol, long price, long qty) {
+        return new Order(idGenerator++, symbol, Side.SELL, OrderType.LIMIT, price, qty, System.nanoTime());
     }
 
-    // 1. Add BUY order
     @Test
-    void testAddBuyOrder_NoMatch() {
-        Order buyOrder = createBuyOrder("AAPL", 15000, 100);
-        List<Trade> trades = engine.submitOrder(buyOrder).block();
-        
-        // TODO: Uncomment when matching is implemented
-        // assertNotNull(trades);
-        // assertTrue(trades.isEmpty());
-        // assertEquals(100, buyOrder.getRemainingQuantity());
+    @DisplayName("Submit BUY — no match, order rests in book")
+    void submitBuyNoMatch() {
+        Order buyOrder = buy("AAPL", 15000, 100);
+        List<Trade> trades = engine.submitOrder(buyOrder);
+
+        assertTrue(trades.isEmpty());
+        assertEquals(100, buyOrder.getRemainingQuantity());
+        assertTrue(engine.hasOrder(buyOrder.getId()));
     }
 
-    // 2. Add SELL order
     @Test
-    void testAddSellOrder_NoMatch() {
-        Order sellOrder = createSellOrder("AAPL", 15000, 100);
-        List<Trade> trades = engine.submitOrder(sellOrder).block();
-        
-        // TODO: Uncomment when matching is implemented
-        // assertNotNull(trades);
-        // assertTrue(trades.isEmpty());
-        // assertEquals(100, sellOrder.getRemainingQuantity());
+    @DisplayName("Submit SELL — no match, order rests in book")
+    void submitSellNoMatch() {
+        Order sellOrder = sell("AAPL", 15000, 100);
+        List<Trade> trades = engine.submitOrder(sellOrder);
+
+        assertTrue(trades.isEmpty());
+        assertEquals(100, sellOrder.getRemainingQuantity());
     }
 
-    // 3. Orders are sorted correctly by price
     @Test
-    void testOrdersSortedCorrectlyByPrice() {
-        Order buy1 = createBuyOrder("AAPL", 10000, 10);
-        Order buy2 = createBuyOrder("AAPL", 10100, 10);
-        Order buy3 = createBuyOrder("AAPL", 9900, 10);
+    @DisplayName("Full fill through engine")
+    void fullFill() {
+        Order buyOrder = buy("AAPL", 10000, 100);
+        engine.submitOrder(buyOrder);
 
-        engine.submitOrder(buy1).block();
-        engine.submitOrder(buy2).block();
-        engine.submitOrder(buy3).block();
+        Order sellOrder = sell("AAPL", 10000, 100);
+        List<Trade> trades = engine.submitOrder(sellOrder);
 
-        // TODO: Assert that the order book has buy2 at the top (highest price)
+        assertEquals(1, trades.size());
+        assertEquals(100, trades.get(0).getQuantity());
+        assertEquals(0, buyOrder.getRemainingQuantity());
+        assertEquals(0, sellOrder.getRemainingQuantity());
     }
 
-    // 4. Same-price orders preserve FIFO
     @Test
-    void testSamePriceOrdersPreserveFIFO() {
-        Order buy1 = createBuyOrder("AAPL", 10000, 10);
-        Order buy2 = createBuyOrder("AAPL", 10000, 20);
+    @DisplayName("Partial fill through engine")
+    void partialFill() {
+        Order buyOrder = buy("AAPL", 10000, 100);
+        engine.submitOrder(buyOrder);
 
-        engine.submitOrder(buy1).block();
-        engine.submitOrder(buy2).block();
+        Order sellOrder = sell("AAPL", 10000, 40);
+        List<Trade> trades = engine.submitOrder(sellOrder);
 
-        Order sell = createSellOrder("AAPL", 10000, 15);
-        List<Trade> trades = engine.submitOrder(sell).block();
-
-        // TODO: Assert buy1 is completely filled, and buy2 is partially filled.
+        assertEquals(1, trades.size());
+        assertEquals(40, trades.get(0).getQuantity());
+        assertEquals(60, buyOrder.getRemainingQuantity());
     }
 
-    // 5. No match when BUY price < SELL price
     @Test
-    void testNoMatchWhenBuyPriceLessThanSellPrice() {
-        engine.submitOrder(createSellOrder("AAPL", 10100, 100)).block();
-        
-        List<Trade> trades = engine.submitOrder(createBuyOrder("AAPL", 10000, 50)).block();
-        
-        // TODO: Uncomment when implemented
-        // assertNotNull(trades);
-        // assertTrue(trades.isEmpty());
+    @DisplayName("Duplicate order ID throws InvalidOrderException")
+    void duplicateOrderIdThrows() {
+        Order order1 = new Order(42, "AAPL", Side.BUY, OrderType.LIMIT, 10000, 100, System.nanoTime());
+        engine.submitOrder(order1);
+
+        Order order2 = new Order(42, "AAPL", Side.SELL, OrderType.LIMIT, 10000, 50, System.nanoTime());
+        assertThrows(InvalidOrderException.class, () -> engine.submitOrder(order2));
     }
 
-    // 6. Full fill
     @Test
-    void testFullFill() {
-        Order buy = createBuyOrder("AAPL", 10000, 100);
-        engine.submitOrder(buy).block();
+    @DisplayName("Cancel removes order from book")
+    void cancelOrder() {
+        Order buyOrder = buy("AAPL", 10000, 100);
+        engine.submitOrder(buyOrder);
 
-        Order sell = createSellOrder("AAPL", 10000, 100);
-        List<Trade> trades = engine.submitOrder(sell).block();
+        boolean cancelled = engine.cancelOrder("AAPL", buyOrder.getId(), Side.BUY);
+        assertTrue(cancelled);
+        assertFalse(engine.hasOrder(buyOrder.getId()));
 
-        // TODO: Assert 1 trade of size 100
+        // Sell should not match the cancelled order
+        Order sellOrder = sell("AAPL", 10000, 100);
+        List<Trade> trades = engine.submitOrder(sellOrder);
+        assertTrue(trades.isEmpty());
     }
 
-    // 7. Partial fill
     @Test
-    void testPartialFill() {
-        Order buy = createBuyOrder("AAPL", 10000, 100);
-        engine.submitOrder(buy).block();
-
-        Order sell = createSellOrder("AAPL", 10000, 40);
-        List<Trade> trades = engine.submitOrder(sell).block();
-
-        // TODO: Assert 1 trade of size 40
+    @DisplayName("Cancel non-existent order returns false")
+    void cancelNonExistent() {
+        assertFalse(engine.cancelOrder("AAPL", 999, Side.BUY));
     }
 
-    // 8. Multiple orders at different prices
     @Test
-    void testMultipleOrdersAtDifferentPrices() {
-        engine.submitOrder(createSellOrder("AAPL", 10100, 50)).block();
-        engine.submitOrder(createSellOrder("AAPL", 10200, 50)).block();
+    @DisplayName("Different symbols are isolated")
+    void multiSymbolIsolation() {
+        Order aaplBuy = buy("AAPL", 10000, 100);
+        Order googlSell = sell("GOOGL", 10000, 100);
 
-        Order aggressiveBuy = createBuyOrder("AAPL", 10300, 75);
-        List<Trade> trades = engine.submitOrder(aggressiveBuy).block();
+        engine.submitOrder(aaplBuy);
+        List<Trade> trades = engine.submitOrder(googlSell);
 
-        // TODO: Assert 2 trades (at 10100 and 10200)
+        // Should NOT match — different symbols
+        assertTrue(trades.isEmpty());
+        assertEquals(100, aaplBuy.getRemainingQuantity());
+        assertEquals(100, googlSell.getRemainingQuantity());
     }
 
-    // 9. Multiple orders at the same price
     @Test
-    void testMultipleOrdersAtSamePrice() {
-        engine.submitOrder(createSellOrder("AAPL", 10000, 30)).block();
-        engine.submitOrder(createSellOrder("AAPL", 10000, 40)).block();
+    @DisplayName("No match when buy price < sell price")
+    void noMatchWhenBuyBelowSell() {
+        engine.submitOrder(sell("AAPL", 10100, 100));
+        List<Trade> trades = engine.submitOrder(buy("AAPL", 10000, 50));
 
-        Order buy = createBuyOrder("AAPL", 10000, 50);
-        List<Trade> trades = engine.submitOrder(buy).block();
-
-        // TODO: Assert 2 trades (size 30 and 20)
+        assertTrue(trades.isEmpty());
     }
 
-    // 10. Cancellation
     @Test
-    void testCancellation() {
-        Order buy = createBuyOrder("AAPL", 10000, 100);
-        engine.submitOrder(buy).block();
-        
-        // TODO: Uncomment when implemented
-        // Boolean cancelled = engine.cancelOrder("AAPL", buy.getId(), Side.BUY).block();
-        // assertTrue(cancelled);
-    }
+    @DisplayName("Multiple orders at different prices")
+    void multipleOrdersDifferentPrices() {
+        engine.submitOrder(sell("AAPL", 10100, 50));
+        engine.submitOrder(sell("AAPL", 10200, 50));
 
-    // 11. Quantity must be positive
-    @Test
-    void testQuantityMustBePositive() {
-        assertThrows(IllegalArgumentException.class, () -> 
-            new Order(idGenerator++, "AAPL", Side.BUY, OrderType.LIMIT, 10000, 0, System.nanoTime())
-        );
-    }
+        Order aggressiveBuy = buy("AAPL", 10300, 75);
+        List<Trade> trades = engine.submitOrder(aggressiveBuy);
 
-    // 12. Price must be positive
-    @Test
-    void testPriceMustBePositive() {
-        assertThrows(IllegalArgumentException.class, () -> 
-            new Order(idGenerator++, "AAPL", Side.BUY, OrderType.LIMIT, -100, 100, System.nanoTime())
-        );
+        assertEquals(2, trades.size());
+        assertEquals(10100, trades.get(0).getPrice());
+        assertEquals(50, trades.get(0).getQuantity());
+        assertEquals(10200, trades.get(1).getPrice());
+        assertEquals(25, trades.get(1).getQuantity());
     }
 }
