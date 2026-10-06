@@ -26,6 +26,7 @@ public class RouterConfig {
         return RouterFunctions
                 .route(POST("/api/orders").and(accept(APPLICATION_JSON)), handler::submitOrder)
                 .andRoute(DELETE("/api/orders").and(accept(APPLICATION_JSON)), handler::cancelOrder)
-                .andRoute(GET("/api/orderbook/{symbol}"), handler::getOrderBook);
+                .andRoute(GET("/api/orderbook/{symbol}"), handler::getOrderBook)
+                .andRoute(GET("/api/trades/{symbol}"), handler::getTrades);
     }
 }

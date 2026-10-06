@@ -105,6 +105,22 @@ public class MatchingEngineHandler {
         }
     }
 
+    /**
+     * {@code GET /api/trades/{symbol}} — Get recent trades.
+     */
+    public Mono<ServerResponse> getTrades(ServerRequest request) {
+        String symbol = request.pathVariable("symbol");
+        List<TradeResponse> responses = service.getTrades(symbol).stream()
+                .limit(50) // limit for UI performance
+                .map(t -> new TradeResponse(
+                        t.getTradeId(), t.getBuyOrderId(),
+                        t.getSellOrderId(), t.getSymbol(),
+                        t.getPrice(), t.getQuantity()))
+                .toList();
+
+        return ServerResponse.ok().bodyValue(responses);
+    }
+
     private List<PriceLevelEntry> aggregateSide(TreeMap<Long, PriceLevel> side) {
         List<PriceLevelEntry> entries = new ArrayList<>();
         for (Map.Entry<Long, PriceLevel> e : side.entrySet()) {

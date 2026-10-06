@@ -19,6 +19,7 @@ import org.springframework.data.redis.serializer.StringRedisSerializer;
 public class RedisConfig {
 
     @Bean
+    @Primary
     public ReactiveRedisTemplate<String, String> reactiveJsonRedisTemplate(
             ReactiveRedisConnectionFactory connectionFactory) {
 

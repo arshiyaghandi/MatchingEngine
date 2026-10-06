@@ -17,7 +17,10 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Reactive service layer wrapping the pure-Java {@link MatchingEngine}.
@@ -43,6 +46,7 @@ public class MatchingEngineService {
     private static final Logger log = LoggerFactory.getLogger(MatchingEngineService.class);
 
     private final MatchingEngine engine;
+    private final Map<String, List<Trade>> tradeHistory = new ConcurrentHashMap<>();
 
     private final PersistenceService persistenceService;
     private final OrderBookCacheService cacheService;
@@ -73,8 +77,19 @@ public class MatchingEngineService {
     public Mono<List<Trade>> submitOrder(Order order) {
         return Mono.fromCallable(() -> engine.submitOrder(order))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(trades -> processSubmitSideEffects(order, trades)
-                        .thenReturn(trades));
+                .flatMap(trades -> {
+                    if (!trades.isEmpty()) {
+                        tradeHistory.computeIfAbsent(order.getSymbol(), k -> Collections.synchronizedList(new ArrayList<>()))
+                                .addAll(0, trades); // Prepend latest trades
+                    }
+                    return processSubmitSideEffects(order, trades)
+                            .thenReturn(trades);
+                });
+    }
+
+    /** Gets recent trades for a symbol (for UI). */
+    public List<Trade> getTrades(String symbol) {
+        return tradeHistory.getOrDefault(symbol, List.of());
     }
 
     /** Cancels an order reactively. */
