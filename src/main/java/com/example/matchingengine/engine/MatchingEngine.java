@@ -24,6 +24,15 @@ public class MatchingEngine {
 
     private final Map<String, OrderBook> orderBooks = new ConcurrentHashMap<>();
     private final Set<Long> knownOrderIds = ConcurrentHashMap.newKeySet();
+    private final java.util.function.LongSupplier tradeIdSupplier;
+
+    public MatchingEngine() {
+        this(null);
+    }
+
+    public MatchingEngine(java.util.function.LongSupplier tradeIdSupplier) {
+        this.tradeIdSupplier = tradeIdSupplier;
+    }
 
     /**
      * Submits an order for matching.
@@ -37,7 +46,7 @@ public class MatchingEngine {
             throw new InvalidOrderException("Duplicate order ID: " + order.getId());
         }
 
-        OrderBook book = orderBooks.computeIfAbsent(order.getSymbol(), OrderBook::new);
+        OrderBook book = orderBooks.computeIfAbsent(order.getSymbol(), s -> new OrderBook(s, tradeIdSupplier));
         synchronized (book) {
             return book.addOrder(order);
         }

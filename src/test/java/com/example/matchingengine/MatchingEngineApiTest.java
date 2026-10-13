@@ -147,4 +147,73 @@ class MatchingEngineApiTest {
                 .exchange()
                 .expectStatus().isBadRequest();
     }
+
+    @Test
+    @DisplayName("POST /api/orders — submit MARKET order matches immediately")
+    void submitMarketOrder() {
+        // Place resting limit sell order
+        webTestClient.post().uri("/api/orders")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new OrderRequest("NVDA", "SELL", "LIMIT", 50000, 10))
+                .exchange()
+                .expectStatus().isOk();
+
+        // Submit aggressive market buy
+        webTestClient.post().uri("/api/orders")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new OrderRequest("NVDA", "BUY", "MARKET", 0, 10))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(OrderResponse.class)
+                .value(resp -> {
+                    assertEquals("NVDA", resp.symbol());
+                    assertEquals("BUY", resp.side());
+                    assertFalse(resp.trades().isEmpty());
+                    assertEquals(1, resp.trades().size());
+                    assertEquals(10, resp.trades().get(0).quantity());
+                    assertEquals(50000, resp.trades().get(0).price());
+                });
+    }
+
+    @Test
+    @DisplayName("GET /api/orderbook/{symbol} — returns X-Correlation-ID header")
+    void returnsCorrelationIdHeader() {
+        webTestClient.get().uri("/api/orderbook/AAPL")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().exists("X-Correlation-ID");
+    }
+
+    @Test
+    @DisplayName("POST /api/orders — submit IOC order fills immediately without resting")
+    void submitIocOrder() {
+        // Place resting limit sell order
+        webTestClient.post().uri("/api/orders")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new OrderRequest("AMD", "SELL", "LIMIT", 12000, 20))
+                .exchange()
+                .expectStatus().isOk();
+
+        // Submit IOC buy for 30 (only 20 available)
+        webTestClient.post().uri("/api/orders")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new OrderRequest("AMD", "BUY", "IOC", 12000, 30))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(OrderResponse.class)
+                .value(resp -> {
+                    assertEquals(1, resp.trades().size());
+                    assertEquals(20, resp.trades().get(0).quantity());
+                });
+
+        // Verify that the remaining 10 is NOT in the book
+        webTestClient.get().uri("/api/orderbook/AMD")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(OrderBookSnapshot.class)
+                .value(snap -> {
+                    assertTrue(snap.bids().isEmpty());
+                    assertTrue(snap.asks().isEmpty());
+                });
+    }
 }

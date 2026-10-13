@@ -237,6 +237,86 @@ class OrderBookTest {
             assertEquals(1, trades.size());
             assertEquals(9900, trades.get(0).getPrice());
         }
+
+        @Test
+        @DisplayName("MARKET BUY matches best ask and does NOT rest in book if unfilled")
+        void marketBuyMatchesAndNeverRests() {
+            book.addOrder(sell(10500, 50));
+
+            // Market buy with qty 100 — only 50 available
+            Order marketBuy = new Order(idCounter++, "AAPL", Side.BUY, OrderType.MARKET, 0, 100, System.nanoTime());
+            List<Trade> trades = book.addOrder(marketBuy);
+
+            assertEquals(1, trades.size());
+            assertEquals(50, trades.get(0).getQuantity());
+            assertEquals(10500, trades.get(0).getPrice());
+            assertEquals(50, marketBuy.getRemainingQuantity());
+            // Market order must NOT be resting in the book
+            assertFalse(book.containsOrder(marketBuy.getId()));
+            assertEquals(0, book.getTotalOrderCount());
+        }
+
+        @Test
+        @DisplayName("MARKET SELL matches best bid and does NOT rest in book if empty")
+        void marketSellOnEmptyBookDoesNotRest() {
+            Order marketSell = new Order(idCounter++, "AAPL", Side.SELL, OrderType.MARKET, 0, 100, System.nanoTime());
+            List<Trade> trades = book.addOrder(marketSell);
+
+            assertTrue(trades.isEmpty());
+            assertFalse(book.containsOrder(marketSell.getId()));
+            assertEquals(0, book.getTotalOrderCount());
+        }
+
+        @Test
+        @DisplayName("IOC (Immediate-Or-Cancel) fills partially and remainder is cancelled, not resting")
+        void iocFillsPartialAndCancelsRemainder() {
+            book.addOrder(sell(10000, 40));
+
+            // IOC buy for 100 @ 10000 — only 40 available
+            Order iocBuy = new Order(idCounter++, "AAPL", Side.BUY, OrderType.IOC, 10000, 100, System.nanoTime());
+            List<Trade> trades = book.addOrder(iocBuy);
+
+            assertEquals(1, trades.size());
+            assertEquals(40, trades.get(0).getQuantity());
+            assertEquals(60, iocBuy.getRemainingQuantity());
+            // Remaining 60 must NOT rest in the book
+            assertFalse(book.containsOrder(iocBuy.getId()));
+            assertEquals(0, book.getTotalOrderCount());
+        }
+
+        @Test
+        @DisplayName("FOK (Fill-Or-Kill) is killed when full quantity cannot be filled")
+        void fokKilledWhenInsufficientLiquidity() {
+            book.addOrder(sell(10000, 40)); // only 40 available
+
+            // FOK buy for 50 — requires 50 but only 40 present
+            Order fokBuy = new Order(idCounter++, "AAPL", Side.BUY, OrderType.FOK, 10000, 50, System.nanoTime());
+            List<Trade> trades = book.addOrder(fokBuy);
+
+            // Must produce 0 trades and resting sell must remain untouched
+            assertTrue(trades.isEmpty());
+            assertFalse(book.containsOrder(fokBuy.getId()));
+            assertEquals(1, book.getTotalOrderCount());
+            assertEquals(40, book.getAsks().get(10000L).peek().getRemainingQuantity());
+        }
+
+        @Test
+        @DisplayName("FOK (Fill-Or-Kill) fills completely when sufficient liquidity exists")
+        void fokFillsWhenLiquiditySufficient() {
+            book.addOrder(sell(10000, 30));
+            book.addOrder(sell(10100, 30));
+
+            // FOK buy for 50 @ 10100 — sweeps 30 @ 10000 + 20 @ 10100
+            Order fokBuy = new Order(idCounter++, "AAPL", Side.BUY, OrderType.FOK, 10100, 50, System.nanoTime());
+            List<Trade> trades = book.addOrder(fokBuy);
+
+            assertEquals(2, trades.size());
+            assertEquals(30, trades.get(0).getQuantity());
+            assertEquals(20, trades.get(1).getQuantity());
+            assertEquals(0, fokBuy.getRemainingQuantity());
+            assertFalse(book.containsOrder(fokBuy.getId()));
+            assertEquals(1, book.getTotalOrderCount()); // 10 remaining at 10100
+        }
     }
 
     // ────────────────────── Cancellation ──────────────────────

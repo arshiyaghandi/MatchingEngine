@@ -4,6 +4,7 @@ import com.example.matchingengine.domain.Order;
 import com.example.matchingengine.domain.OrderType;
 import com.example.matchingengine.domain.Side;
 import com.example.matchingengine.dto.OrderRequest;
+import com.example.matchingengine.service.IdGeneratorService;
 import com.example.matchingengine.service.MatchingEngineService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -14,17 +15,9 @@ import org.springframework.stereotype.Component;
 import reactor.kafka.receiver.KafkaReceiver;
 import reactor.kafka.receiver.ReceiverOptions;
 
-import java.util.concurrent.atomic.AtomicLong;
-
 /**
  * Reactive Kafka consumer that reads inbound order messages from the
  * {@code orders.inbound} topic and feeds them into the matching engine.
- *
- * <p>Messages are JSON-encoded {@link OrderRequest} objects.
- * The consumer starts automatically on application startup via {@link PostConstruct}.</p>
- *
- * <p>Backpressure is handled naturally by Reactor Kafka — the consumer only
- * polls the broker when downstream demand exists.</p>
  */
 @Component
 @ConditionalOnProperty(name = "matching-engine.kafka.enabled", havingValue = "true", matchIfMissing = false)
@@ -34,14 +27,17 @@ public class OrderKafkaConsumer {
 
     private final KafkaReceiver<String, String> receiver;
     private final MatchingEngineService engineService;
+    private final IdGeneratorService idGeneratorService;
     private final ObjectMapper objectMapper;
-    private final AtomicLong orderIdGenerator = new AtomicLong(System.currentTimeMillis());
 
     public OrderKafkaConsumer(ReceiverOptions<String, String> receiverOptions,
-                              MatchingEngineService engineService) {
+                              MatchingEngineService engineService,
+                              IdGeneratorService idGeneratorService,
+                              ObjectMapper objectMapper) {
         this.receiver = KafkaReceiver.create(receiverOptions);
         this.engineService = engineService;
-        this.objectMapper = new ObjectMapper();
+        this.idGeneratorService = idGeneratorService;
+        this.objectMapper = objectMapper;
     }
 
     @PostConstruct
@@ -51,7 +47,7 @@ public class OrderKafkaConsumer {
                     try {
                         OrderRequest req = objectMapper.readValue(record.value(), OrderRequest.class);
                         Order order = new Order(
-                                orderIdGenerator.getAndIncrement(),
+                                idGeneratorService.nextId(),
                                 req.symbol(),
                                 Side.valueOf(req.side().toUpperCase()),
                                 OrderType.valueOf(req.type().toUpperCase()),

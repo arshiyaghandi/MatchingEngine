@@ -105,7 +105,7 @@
             <h2 class="text-sm font-semibold mb-4 text-trading-muted">Place Order</h2>
             
             <!-- Buy / Sell Toggle -->
-            <div class="flex bg-trading-panel rounded border border-trading-border p-1 mb-6">
+            <div class="flex bg-trading-panel rounded border border-trading-border p-1 mb-3">
                 <button @click="side = 'BUY'" 
                         :class="['flex-1 py-1.5 rounded text-sm font-bold transition-all', side === 'BUY' ? 'bg-trading-buy text-white' : 'text-trading-muted hover:text-white']">
                     BUY
@@ -115,10 +115,30 @@
                     SELL
                 </button>
             </div>
+
+            <!-- Order Type Toggle: LIMIT / MARKET / IOC / FOK -->
+            <div class="grid grid-cols-4 gap-1 bg-trading-panel rounded border border-trading-border p-1 mb-6 text-xs">
+                <button @click="orderType = 'LIMIT'" 
+                        :class="['py-1 rounded font-bold transition-all text-center', orderType === 'LIMIT' ? 'bg-[#2b3139] text-white' : 'text-trading-muted hover:text-white']">
+                    LIMIT
+                </button>
+                <button @click="orderType = 'MARKET'" 
+                        :class="['py-1 rounded font-bold transition-all text-center', orderType === 'MARKET' ? 'bg-[#2b3139] text-white' : 'text-trading-muted hover:text-white']">
+                    MARKET
+                </button>
+                <button @click="orderType = 'IOC'" 
+                        :class="['py-1 rounded font-bold transition-all text-center', orderType === 'IOC' ? 'bg-[#2b3139] text-white' : 'text-trading-muted hover:text-white']">
+                    IOC
+                </button>
+                <button @click="orderType = 'FOK'" 
+                        :class="['py-1 rounded font-bold transition-all text-center', orderType === 'FOK' ? 'bg-[#2b3139] text-white' : 'text-trading-muted hover:text-white']">
+                    FOK
+                </button>
+            </div>
             
             <div class="space-y-4">
-                <!-- Price Input -->
-                <div class="bg-trading-panel rounded border border-trading-border p-2 focus-within:border-trading-muted transition-colors">
+                <!-- Price Input (Hidden or Disabled only if MARKET) -->
+                <div v-if="orderType !== 'MARKET'" class="bg-trading-panel rounded border border-trading-border p-2 focus-within:border-trading-muted transition-colors">
                     <div class="flex justify-between text-xs text-trading-muted mb-1">
                         <span>Price</span>
                         <span>USD</span>
@@ -126,6 +146,10 @@
                     <input type="number" v-model.number="price" 
                            class="w-full bg-transparent border-none outline-none text-white font-mono text-right" 
                            step="0.01">
+                </div>
+                <div v-else class="bg-trading-panel/50 rounded border border-trading-border/50 p-2 text-xs text-trading-muted flex justify-between items-center">
+                    <span>Execution Price</span>
+                    <span class="font-mono text-white">Best Market Price</span>
                 </div>
                 
                 <!-- Quantity Input -->
@@ -292,11 +316,13 @@
             const price = ref(150.00);
             const quantity = ref(10);
             const side = ref('BUY');
+            const orderType = ref('LIMIT');
             
             const loading = ref(false);
             const toasts = ref([]);
             let toastCounter = 0;
             let pollInterval = null;
+            let ws = null;
 
             const lastPrice = ref(0);
             const lastPriceUp = ref(true);
@@ -399,19 +425,63 @@
                 }
             };
 
+            const connectWebSocket = () => {
+                if (ws) {
+                    try { ws.close(); } catch (e) {}
+                    ws = null;
+                }
+                const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${proto}//${window.location.host}/ws/market?symbol=${symbol.value}`;
+                try {
+                    ws = new WebSocket(wsUrl);
+                    ws.onmessage = (event) => {
+                        try {
+                            const msg = JSON.parse(event.data);
+                            if (msg.type === 'orderbook' && msg.data) {
+                                bids.value = msg.data.bids || [];
+                                asks.value = msg.data.asks || [];
+                            } else if (msg.type === 'trade' && msg.data) {
+                                const newTrade = msg.data;
+                                trades.value.unshift(newTrade);
+                                if (trades.value.length > 50) trades.value.pop();
+                                if (newTrade.price !== lastPrice.value && lastPrice.value !== 0) {
+                                    lastPriceUp.value = newTrade.price >= lastPrice.value;
+                                }
+                                lastPrice.value = newTrade.price;
+                            }
+                        } catch (err) {
+                            console.error("WS parse error", err);
+                        }
+                    };
+                    ws.onerror = (err) => {
+                        console.warn("WebSocket error, falling back to polling", err);
+                    };
+                    ws.onclose = () => {
+                        // Reconnect attempt after 3s
+                        setTimeout(() => {
+                            if (!ws || ws.readyState === WebSocket.CLOSED) {
+                                connectWebSocket();
+                            }
+                        }, 3000);
+                    };
+                } catch (e) {
+                    console.warn("WebSocket connect failed, polling active", e);
+                }
+            };
+
             const submitOrder = async () => {
-                if (price.value <= 0 || quantity.value <= 0) {
+                if (quantity.value <= 0 || (orderType.value === 'LIMIT' && price.value <= 0)) {
                     showToast('Invalid price or quantity', 'error');
                     return;
                 }
 
                 loading.value = true;
-                const fixedPrice = Math.round(price.value * 100);
+                const fixedPrice = orderType.value === 'LIMIT' ? Math.round(price.value * 100) : 0;
 
                 const payload = {
                     symbol: symbol.value,
                     side: side.value,
-                    type: 'LIMIT',
+                    type: orderType.value,
                     price: fixedPrice,
                     quantity: quantity.value
                 };
@@ -427,13 +497,12 @@
                     
                     if (res.ok) {
                         const tradeCount = data.trades ? data.trades.length : 0;
-                        let msg = `<b>${side.value} Order Placed</b><br>ID: #${data.orderId} - ${data.quantity} @ ${formatPrice(fixedPrice)}`;
+                        let msg = `<b>${side.value} ${orderType.value} Order Placed</b><br>ID: #${data.orderId} - ${data.quantity} @ ${orderType.value === 'LIMIT' ? formatPrice(fixedPrice) : 'MARKET'}`;
                         if (tradeCount > 0) msg += `<br><span class="text-trading-buy mt-1 inline-block">Executed ${tradeCount} trade(s)!</span>`;
                         
                         showToast(msg, 'success');
                         
-                        // Add to active orders tracking if not fully filled (simple logic)
-                        if (tradeCount === 0) {
+                        if (tradeCount === 0 && orderType.value === 'LIMIT') {
                             myOrders.value.unshift({
                                 id: data.orderId,
                                 side: side.value,
@@ -472,7 +541,6 @@
                     } else {
                         const data = await res.json();
                         showToast(`Cancel failed: ${data.error || 'Not found'}`, 'error');
-                        // Remove it anyway if it's dead
                         myOrders.value = myOrders.value.filter(o => o.id !== ord.id);
                     }
                 } catch (e) {
@@ -483,18 +551,22 @@
             // Lifecycle
             onMounted(() => {
                 fetchData();
-                pollInterval = setInterval(fetchData, 1000);
+                connectWebSocket();
+                pollInterval = setInterval(fetchData, 2000);
                 nextTick(() => lucide.createIcons());
             });
 
             onUnmounted(() => {
                 if (pollInterval) clearInterval(pollInterval);
+                if (ws) {
+                    try { ws.close(); } catch (e) {}
+                }
             });
 
             return {
                 symbolInput, symbol, changeSymbol,
                 bids, asks, reversedAsks, trades, myOrders,
-                price, quantity, side, spread, maxQuantity,
+                price, quantity, side, orderType, spread, maxQuantity,
                 lastPrice, lastPriceUp, lastPriceColor,
                 loading, toasts,
                 formatPrice, formatTime, getDepthPercentage, setPrice,

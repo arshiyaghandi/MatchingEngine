@@ -1,6 +1,7 @@
 package com.example.matchingengine.engine;
 
 import com.example.matchingengine.domain.Order;
+import com.example.matchingengine.domain.OrderType;
 import com.example.matchingengine.domain.PriceLevel;
 import com.example.matchingengine.domain.Side;
 import com.example.matchingengine.domain.Trade;
@@ -25,6 +26,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>Execution price = <strong>resting</strong> order's price</li>
  * </ul>
  *
+ * <h3>MARKET Orders</h3>
+ * <p>MARKET orders match against any resting order (sentinel prices guarantee
+ * a price-cross). Unfilled MARKET orders are <em>not</em> placed in the book.</p>
+ *
  * <p><strong>Thread-safety:</strong> This class is <em>not</em> thread-safe.
  * External synchronization (e.g. per-symbol lock) is required.</p>
  */
@@ -41,15 +46,19 @@ public class OrderBook {
     /** Fast O(1) lookup by order ID — used for cancellation. */
     private final Map<Long, Order> orderIndex;
 
-    /** Monotonically increasing trade-ID generator (book-local). */
-    private final AtomicLong tradeIdGenerator;
+    /** Trade-ID generator. */
+    private final java.util.function.LongSupplier tradeIdSupplier;
 
     public OrderBook(String symbol) {
+        this(symbol, new AtomicLong(1)::getAndIncrement);
+    }
+
+    public OrderBook(String symbol, java.util.function.LongSupplier tradeIdSupplier) {
         this.symbol = symbol;
         this.bids = new TreeMap<>(Collections.reverseOrder());
         this.asks = new TreeMap<>();
         this.orderIndex = new HashMap<>();
-        this.tradeIdGenerator = new AtomicLong(1);
+        this.tradeIdSupplier = (tradeIdSupplier != null) ? tradeIdSupplier : new AtomicLong(1)::getAndIncrement;
     }
 
     public String getSymbol() {
@@ -62,10 +71,21 @@ public class OrderBook {
      * Adds an incoming order: first tries to match against the opposite side,
      * then rests any unfilled remainder in the book.
      *
+     * <p>MARKET orders never rest — unfilled quantity is implicitly cancelled.</p>
+     *
      * @param order the incoming order (aggressor)
      * @return trades generated (may be empty)
      */
     public List<Trade> addOrder(Order order) {
+        // FOK (Fill-Or-Kill): check if full quantity can be matched immediately
+        if (order.getType() == OrderType.FOK) {
+            long available = getAvailableMatchingQuantity(order);
+            if (available < order.getOriginalQuantity()) {
+                // Cannot fill completely — kill the order immediately without any partial match
+                return Collections.emptyList();
+            }
+        }
+
         List<Trade> trades = new ArrayList<>();
 
         if (order.getSide() == Side.BUY) {
@@ -74,12 +94,37 @@ public class OrderBook {
             matchAgainst(order, bids, trades, false);
         }
 
-        // Rest unfilled quantity in the book
-        if (!order.isFilled()) {
+        // MARKET, IOC, and FOK orders NEVER rest in the book
+        boolean canRestInBook = (order.getType() == OrderType.LIMIT);
+        if (!order.isFilled() && canRestInBook) {
             insertIntoBook(order);
         }
 
         return trades;
+    }
+
+    /**
+     * Calculates the total quantity available to match against this order
+     * at prices that satisfy the price-cross condition (used for FOK pre-flight).
+     */
+    private long getAvailableMatchingQuantity(Order order) {
+        TreeMap<Long, PriceLevel> oppositeSide = (order.getSide() == Side.BUY) ? asks : bids;
+        long totalAvailable = 0;
+
+        for (Map.Entry<Long, PriceLevel> entry : oppositeSide.entrySet()) {
+            long restingPrice = entry.getKey();
+            if (order.getSide() == Side.BUY && order.getPrice() < restingPrice) break;
+            if (order.getSide() == Side.SELL && order.getPrice() > restingPrice) break;
+
+            for (Order resting : entry.getValue().getOrders()) {
+                totalAvailable += resting.getRemainingQuantity();
+                if (totalAvailable >= order.getOriginalQuantity()) {
+                    return totalAvailable;
+                }
+            }
+        }
+
+        return totalAvailable;
     }
 
     // ────────────────────────────── Matching ──────────────────────────────
@@ -122,7 +167,7 @@ public class OrderBook {
                 long sellId = incomingIsBuy ? resting.getId()  : incoming.getId();
 
                 trades.add(new Trade(
-                        tradeIdGenerator.getAndIncrement(),
+                        tradeIdSupplier.getAsLong(),
                         buyId,
                         sellId,
                         incoming.getSymbol(),

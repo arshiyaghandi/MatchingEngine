@@ -1,21 +1,14 @@
 package com.example.matchingengine.cache;
 
-import com.example.matchingengine.domain.Order;
-import com.example.matchingengine.domain.PriceLevel;
 import com.example.matchingengine.dto.OrderBookSnapshot;
-import com.example.matchingengine.dto.OrderBookSnapshot.PriceLevelEntry;
 import com.example.matchingengine.engine.OrderBook;
+import com.example.matchingengine.util.OrderBookAggregator;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
 
 /**
  * Write-through cache for order-book snapshots in Redis.
@@ -32,16 +25,16 @@ public class OrderBookCacheService {
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
 
-    public OrderBookCacheService(ReactiveRedisTemplate<String, String> redisTemplate) {
+    public OrderBookCacheService(ReactiveRedisTemplate<String, String> redisTemplate, ObjectMapper objectMapper) {
         this.redisTemplate = redisTemplate;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
     }
 
     /**
      * Serialises the current state of the order book and stores it in Redis.
      */
     public Mono<Void> cacheOrderBookSnapshot(String symbol, OrderBook book) {
-        OrderBookSnapshot snapshot = buildSnapshot(symbol, book);
+        OrderBookSnapshot snapshot = OrderBookAggregator.buildSnapshot(symbol, book);
         try {
             String json = objectMapper.writeValueAsString(snapshot);
             return redisTemplate.opsForValue()
@@ -63,27 +56,5 @@ public class OrderBookCacheService {
                         return Mono.error(e);
                     }
                 });
-    }
-
-    // ──────────────── Helpers ────────────────
-
-    private OrderBookSnapshot buildSnapshot(String symbol, OrderBook book) {
-        List<PriceLevelEntry> bids = aggregateSide(book.getBids());
-        List<PriceLevelEntry> asks = aggregateSide(book.getAsks());
-        return new OrderBookSnapshot(symbol, bids, asks);
-    }
-
-    private List<PriceLevelEntry> aggregateSide(TreeMap<Long, PriceLevel> side) {
-        List<PriceLevelEntry> entries = new ArrayList<>();
-        for (Map.Entry<Long, PriceLevel> e : side.entrySet()) {
-            long totalQty = 0;
-            int count = 0;
-            for (Order order : e.getValue().getOrders()) {
-                totalQty += order.getRemainingQuantity();
-                count++;
-            }
-            entries.add(new PriceLevelEntry(e.getKey(), totalQty, count));
-        }
-        return entries;
     }
 }

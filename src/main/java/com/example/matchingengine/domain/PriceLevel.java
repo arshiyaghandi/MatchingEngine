@@ -7,7 +7,7 @@ import java.util.Queue;
  * Represents a specific price level in the OrderBook.
  * Maintains a FIFO queue of orders at this price.
  */
-public class    PriceLevel {
+public class PriceLevel {
     private final long price;
     private final Queue<Order> orders;
 

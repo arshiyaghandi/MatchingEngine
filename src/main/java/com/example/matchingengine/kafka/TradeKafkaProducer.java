@@ -3,7 +3,6 @@ package com.example.matchingengine.kafka;
 import com.example.matchingengine.domain.Trade;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,9 +36,10 @@ public class TradeKafkaProducer {
 
     public TradeKafkaProducer(
             SenderOptions<String, String> senderOptions,
+            ObjectMapper objectMapper,
             @Value("${matching-engine.kafka.outbound-topic}") String outboundTopic) {
         this.sender = KafkaSender.create(senderOptions);
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
         this.outboundTopic = outboundTopic;
     }
 
@@ -49,6 +49,10 @@ public class TradeKafkaProducer {
      * @return completes when all records have been acknowledged
      */
     public Mono<Void> publishTrades(List<Trade> trades) {
+        if (trades.isEmpty()) {
+            return Mono.empty();
+        }
+
         Flux<SenderRecord<String, String, Long>> records = Flux.fromIterable(trades)
                 .map(trade -> {
                     String json = serialise(trade);
@@ -66,18 +70,10 @@ public class TradeKafkaProducer {
     }
 
     private String serialise(Trade trade) {
-        ObjectNode node = objectMapper.createObjectNode();
-        node.put("tradeId", trade.getTradeId());
-        node.put("buyOrderId", trade.getBuyOrderId());
-        node.put("sellOrderId", trade.getSellOrderId());
-        node.put("symbol", trade.getSymbol());
-        node.put("price", trade.getPrice());
-        node.put("quantity", trade.getQuantity());
-        node.put("timestamp", trade.getTimestamp());
         try {
-            return objectMapper.writeValueAsString(node);
+            return objectMapper.writeValueAsString(trade);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Failed to serialise trade", e);
+            throw new RuntimeException("Failed to serialise trade: " + trade.getTradeId(), e);
         }
     }
 }

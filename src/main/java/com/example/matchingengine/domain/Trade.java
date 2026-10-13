@@ -26,4 +26,10 @@ public class Trade {
     public long getPrice() { return price; }
     public long getQuantity() { return quantity; }
     public long getTimestamp() { return timestamp; }
+
+    @Override
+    public String toString() {
+        return "Trade{id=%d, buy=%d, sell=%d, symbol='%s', price=%d, qty=%d}"
+                .formatted(tradeId, buyOrderId, sellOrderId, symbol, price, quantity);
+    }
 }

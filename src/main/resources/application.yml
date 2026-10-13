@@ -31,3 +31,17 @@ matching-engine:
     enabled: true
     # Daily event logs kept in Redis for this many days
     event-log-ttl-days: 7
+
+# ─── Actuator / Observability ───
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true

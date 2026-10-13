@@ -2,22 +2,21 @@ package com.example.matchingengine.api;
 
 import com.example.matchingengine.domain.Order;
 import com.example.matchingengine.domain.OrderType;
-import com.example.matchingengine.domain.PriceLevel;
 import com.example.matchingengine.domain.Side;
 import com.example.matchingengine.dto.*;
-import com.example.matchingengine.dto.OrderBookSnapshot.PriceLevelEntry;
-import com.example.matchingengine.engine.OrderBook;
+import com.example.matchingengine.service.IdGeneratorService;
 import com.example.matchingengine.service.MatchingEngineService;
 import org.springframework.stereotype.Component;
+import org.springframework.validation.BeanPropertyBindingResult;
+import org.springframework.validation.Errors;
+import org.springframework.validation.Validator;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import org.springframework.web.server.ServerWebInputException;
 import reactor.core.publisher.Mono;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * WebFlux functional handler for the Matching Engine REST API.
@@ -26,10 +25,15 @@ import java.util.concurrent.atomic.AtomicLong;
 public class MatchingEngineHandler {
 
     private final MatchingEngineService service;
-    private final AtomicLong orderIdGenerator = new AtomicLong(1);
+    private final IdGeneratorService idGeneratorService;
+    private final Validator validator;
 
-    public MatchingEngineHandler(MatchingEngineService service) {
+    public MatchingEngineHandler(MatchingEngineService service,
+                                 IdGeneratorService idGeneratorService,
+                                 Validator validator) {
         this.service = service;
+        this.idGeneratorService = idGeneratorService;
+        this.validator = validator;
     }
 
     /**
@@ -37,12 +41,16 @@ public class MatchingEngineHandler {
      */
     public Mono<ServerResponse> submitOrder(ServerRequest request) {
         return request.bodyToMono(OrderRequest.class)
+                .doOnNext(this::validateDto)
                 .flatMap(req -> {
+                    OrderType type = OrderType.valueOf(req.type().toUpperCase());
+                    Side side = Side.valueOf(req.side().toUpperCase());
+
                     Order order = new Order(
-                            orderIdGenerator.getAndIncrement(),
+                            idGeneratorService.nextId(),
                             req.symbol(),
-                            Side.valueOf(req.side().toUpperCase()),
-                            OrderType.valueOf(req.type().toUpperCase()),
+                            side,
+                            type,
                             req.price(),
                             req.quantity(),
                             System.nanoTime());
@@ -64,8 +72,8 @@ public class MatchingEngineHandler {
                 .flatMap(resp -> ServerResponse.ok().bodyValue(resp))
                 .onErrorResume(IllegalArgumentException.class,
                         e -> ServerResponse.badRequest().bodyValue(Map.of("error", e.getMessage())))
-                .onErrorResume(Exception.class,
-                        e -> ServerResponse.badRequest().bodyValue(Map.of("error", e.getMessage())));
+                .onErrorResume(ServerWebInputException.class,
+                        e -> ServerResponse.badRequest().bodyValue(Map.of("error", e.getReason() != null ? e.getReason() : e.getMessage())));
     }
 
     /**
@@ -73,6 +81,7 @@ public class MatchingEngineHandler {
      */
     public Mono<ServerResponse> cancelOrder(ServerRequest request) {
         return request.bodyToMono(CancelRequest.class)
+                .doOnNext(this::validateDto)
                 .flatMap(req -> service.cancelOrder(
                         req.symbol(),
                         req.orderId(),
@@ -89,29 +98,18 @@ public class MatchingEngineHandler {
      * {@code GET /api/orderbook/{symbol}} — Get order-book snapshot.
      */
     public Mono<ServerResponse> getOrderBook(ServerRequest request) {
-        String symbol = request.pathVariable("symbol");
-        OrderBook book = service.getEngine().getOrderBook(symbol);
-
-        if (book == null) {
-            return ServerResponse.ok().bodyValue(
-                    new OrderBookSnapshot(symbol, List.of(), List.of()));
-        }
-
-        synchronized (book) {
-            List<PriceLevelEntry> bids = aggregateSide(book.getBids());
-            List<PriceLevelEntry> asks = aggregateSide(book.getAsks());
-            return ServerResponse.ok().bodyValue(
-                    new OrderBookSnapshot(symbol, bids, asks));
-        }
+        String symbol = request.pathVariable("symbol").toUpperCase();
+        OrderBookSnapshot snapshot = service.getOrderBookSnapshot(symbol);
+        return ServerResponse.ok().bodyValue(snapshot);
     }
 
     /**
      * {@code GET /api/trades/{symbol}} — Get recent trades.
      */
     public Mono<ServerResponse> getTrades(ServerRequest request) {
-        String symbol = request.pathVariable("symbol");
+        String symbol = request.pathVariable("symbol").toUpperCase();
         List<TradeResponse> responses = service.getTrades(symbol).stream()
-                .limit(50) // limit for UI performance
+                .limit(50)
                 .map(t -> new TradeResponse(
                         t.getTradeId(), t.getBuyOrderId(),
                         t.getSellOrderId(), t.getSymbol(),
@@ -121,17 +119,12 @@ public class MatchingEngineHandler {
         return ServerResponse.ok().bodyValue(responses);
     }
 
-    private List<PriceLevelEntry> aggregateSide(TreeMap<Long, PriceLevel> side) {
-        List<PriceLevelEntry> entries = new ArrayList<>();
-        for (Map.Entry<Long, PriceLevel> e : side.entrySet()) {
-            long totalQty = 0;
-            int count = 0;
-            for (var order : e.getValue().getOrders()) {
-                totalQty += order.getRemainingQuantity();
-                count++;
-            }
-            entries.add(new PriceLevelEntry(e.getKey(), totalQty, count));
+    private <T> void validateDto(T target) {
+        Errors errors = new BeanPropertyBindingResult(target, target.getClass().getName());
+        validator.validate(target, errors);
+        if (errors.hasErrors()) {
+            String msg = errors.getAllErrors().getFirst().getDefaultMessage();
+            throw new IllegalArgumentException(msg != null ? msg : "Validation error");
         }
-        return entries;
     }
 }

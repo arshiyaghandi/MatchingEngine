@@ -1,6 +1,7 @@
 package com.example.matchingengine.persistence;
 
 import com.example.matchingengine.domain.Order;
+import com.example.matchingengine.domain.OrderStatus;
 import com.example.matchingengine.domain.Trade;
 import com.example.matchingengine.persistence.entity.OrderEntity;
 import com.example.matchingengine.persistence.entity.TradeEntity;
@@ -9,6 +10,7 @@ import com.example.matchingengine.persistence.repository.TradeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -33,8 +35,11 @@ public class PersistenceService {
         this.tradeRepository = tradeRepository;
     }
 
-    /** Persist a new order. */
+    /**
+     * Persist an order entity in the database.
+     */
     public Mono<Void> persistOrder(Order order) {
+        OrderStatus status = OrderStatus.fromQuantities(order.getOriginalQuantity(), order.getRemainingQuantity());
         OrderEntity entity = new OrderEntity(
                 order.getId(),
                 order.getSymbol(),
@@ -43,13 +48,18 @@ public class PersistenceService {
                 order.getPrice(),
                 order.getOriginalQuantity(),
                 order.getRemainingQuantity(),
-                order.isFilled() ? "FILLED" : "ACTIVE"
+                status.name()
         );
         return orderRepository.save(entity).then();
     }
 
-    /** Persist a batch of trades. */
+    /**
+     * Persist a batch of trades.
+     */
     public Mono<Void> persistTrades(List<Trade> trades) {
+        if (trades.isEmpty()) {
+            return Mono.empty();
+        }
         List<TradeEntity> entities = trades.stream()
                 .map(t -> new TradeEntity(
                         t.getTradeId(),
@@ -65,14 +75,18 @@ public class PersistenceService {
                 .then();
     }
 
-    /** Update order status (e.g. CANCELLED, FILLED, PARTIALLY_FILLED). */
-    public Mono<Void> updateOrderStatus(long orderId, String status) {
-        return orderRepository.updateStatus(orderId, status).then();
+    /**
+     * Update order status (e.g. CANCELLED, FILLED, PARTIALLY_FILLED) using type-safe enum.
+     */
+    public Mono<Void> updateOrderStatus(long orderId, OrderStatus status) {
+        return orderRepository.updateStatus(orderId, status.name()).then();
     }
 
-    /** Update order remaining quantity and status after a partial/full fill. */
+    /**
+     * Update order remaining quantity and status after a partial/full fill.
+     */
     public Mono<Void> updateOrderFill(long orderId, long remainingQuantity) {
-        String status = (remainingQuantity == 0) ? "FILLED" : "PARTIALLY_FILLED";
-        return orderRepository.updateRemainingQuantity(orderId, remainingQuantity, status).then();
+        OrderStatus status = (remainingQuantity == 0) ? OrderStatus.FILLED : OrderStatus.PARTIALLY_FILLED;
+        return orderRepository.updateRemainingQuantity(orderId, remainingQuantity, status.name()).then();
     }
 }
