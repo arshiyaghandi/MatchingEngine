@@ -15,6 +15,16 @@ spring:
   kafka:
     bootstrap-servers: localhost:9092
 
+  datasource:
+    url: jdbc:postgresql://localhost:5432/matching_engine
+    username: postgres
+    password: postgres
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
 # ─── Application Settings ───
 matching-engine:
   # Fixed-point price scale: 100 means 2 decimal places.
@@ -31,6 +41,9 @@ matching-engine:
     enabled: true
     # Daily event logs kept in Redis for this many days
     event-log-ttl-days: 7
+
+  rate-limit:
+    max-requests-per-second: 100
 
 # ─── Actuator / Observability ───
 management:

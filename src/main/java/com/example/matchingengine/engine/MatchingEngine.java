@@ -66,6 +66,29 @@ public class MatchingEngine {
 
         synchronized (book) {
             boolean cancelled = book.cancelOrder(orderId, side);
+            if (!cancelled) {
+                cancelled = book.cancelStopOrder(orderId, side);
+            }
+            if (cancelled) {
+                knownOrderIds.remove(orderId);
+            }
+            return cancelled;
+        }
+    }
+
+    /**
+     * Cancels a pending stop order.
+     *
+     * @param symbol  instrument symbol
+     * @param orderId ID of the stop order to cancel
+     * @return true if found and cancelled
+     */
+    public boolean cancelStopOrder(String symbol, long orderId) {
+        OrderBook book = orderBooks.get(symbol);
+        if (book == null) return false;
+
+        synchronized (book) {
+            boolean cancelled = book.cancelStopOrder(orderId);
             if (cancelled) {
                 knownOrderIds.remove(orderId);
             }

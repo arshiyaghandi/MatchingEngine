@@ -1,5 +1,8 @@
 # Test profile — uses H2 in-memory, no Kafka/Redis
 spring:
+  flyway:
+    enabled: false
+
   r2dbc:
     url: r2dbc:h2:mem:///testdb
     username: sa

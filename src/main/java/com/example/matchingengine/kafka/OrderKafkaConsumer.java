@@ -53,7 +53,8 @@ public class OrderKafkaConsumer {
                                 OrderType.valueOf(req.type().toUpperCase()),
                                 req.price(),
                                 req.quantity(),
-                                System.nanoTime());
+                                System.nanoTime(),
+                                req.stopPrice());
 
                         return engineService.submitOrder(order)
                                 .doOnNext(trades ->

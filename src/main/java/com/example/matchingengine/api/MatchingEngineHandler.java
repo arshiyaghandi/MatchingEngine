@@ -53,7 +53,8 @@ public class MatchingEngineHandler {
                             type,
                             req.price(),
                             req.quantity(),
-                            System.nanoTime());
+                            System.nanoTime(),
+                            req.stopPrice());
 
                     return service.submitOrder(order)
                             .map(trades -> new OrderResponse(
@@ -67,7 +68,8 @@ public class MatchingEngineHandler {
                                                     t.getTradeId(), t.getBuyOrderId(),
                                                     t.getSellOrderId(), t.getSymbol(),
                                                     t.getPrice(), t.getQuantity()))
-                                            .toList()));
+                                            .toList(),
+                                    order.getStopPrice()));
                 })
                 .flatMap(resp -> ServerResponse.ok().bodyValue(resp))
                 .onErrorResume(IllegalArgumentException.class,

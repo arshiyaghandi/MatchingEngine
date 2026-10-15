@@ -28,8 +28,13 @@ public class Order {
     private final long originalQuantity;
     private long remainingQuantity;
     private final long timestamp;
+    private final long stopPrice;
 
     public Order(long id, String symbol, Side side, OrderType type, long price, long quantity, long timestamp) {
+        this(id, symbol, side, type, price, quantity, timestamp, 0L);
+    }
+
+    public Order(long id, String symbol, Side side, OrderType type, long price, long quantity, long timestamp, long stopPrice) {
         if (quantity <= 0) {
             throw new IllegalArgumentException("Quantity must be strictly positive");
         }
@@ -45,7 +50,7 @@ public class Order {
         this.remainingQuantity = quantity;
         this.timestamp = timestamp;
 
-        if (type == OrderType.MARKET) {
+        if (type == OrderType.MARKET || type == OrderType.STOP_MARKET) {
             // Sentinel prices guarantee a cross against any resting order
             this.price = (side == Side.BUY) ? Long.MAX_VALUE : 1L;
         } else {
@@ -54,6 +59,13 @@ public class Order {
             }
             this.price = price;
         }
+
+        if (type == OrderType.STOP_LIMIT || type == OrderType.STOP_MARKET) {
+            if (stopPrice <= 0) {
+                throw new IllegalArgumentException("Stop price must be strictly positive");
+            }
+        }
+        this.stopPrice = stopPrice;
     }
 
     // ────────────────────────── Accessors ──────────────────────────
@@ -66,6 +78,7 @@ public class Order {
     public long getOriginalQuantity() { return originalQuantity; }
     public long getRemainingQuantity() { return remainingQuantity; }
     public long getTimestamp() { return timestamp; }
+    public long getStopPrice() { return stopPrice; }
 
     // ────────────────────────── Mutators ──────────────────────────
 

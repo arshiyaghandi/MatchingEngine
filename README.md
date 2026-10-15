@@ -208,17 +208,32 @@ src/main/java/com/example/matchingengine/
 - **Fault-tolerant side effects** — If PostgreSQL, Redis, or Kafka is down, matching still succeeds. Side effects use `onErrorResume(Mono.empty())`.
 - **Optional infrastructure** — All infra beans use `@ConditionalOnProperty`. The engine runs in-memory without any external dependencies.
 
+## Features & Capabilities
+
+- **Order Types**:
+  - `LIMIT`: Traditional resting limit orders with price-time priority.
+  - `MARKET`: Instant execution at best available resting price; unfilled remainder is cancelled.
+  - `IOC` (Immediate-Or-Cancel): Fills available liquidity immediately, cancels the unfilled portion.
+  - `FOK` (Fill-Or-Kill): Fills full quantity immediately or kills entire order (no partial executions).
+  - `STOP_LIMIT`: Rests until market reaches trigger price, then activates as a LIMIT order.
+  - `STOP_MARKET`: Rests until market reaches trigger price, then activates as a MARKET order.
+- **Real-Time WebSocket Streaming**: Reactive multiplexed orderbook & trades push stream via `/ws/market?symbol={SYMBOL}`.
+- **Database Migrations**: Managed via Flyway (`db/migration/V1__initial_schema.sql`, `V2__add_stop_price.sql`).
+- **Observability & Health**:
+  - Prometheus metrics export (`/actuator/prometheus`) and custom Grafana provisioning.
+  - Custom Spring Boot Actuator Health Indicator (`/actuator/health`).
+- **Protection & Reliability**:
+  - Token-bucket rate limiter (`RateLimitWebFilter`) protecting order submission endpoints.
+  - Fault-tolerant non-blocking side effects (PostgreSQL, Kafka, Redis).
+  - Containerized production deployment via multi-stage Alpine Dockerfile.
+
 ## Current Limitations
-- Only LIMIT orders (no Market, Stop, IOC, FOK)
 - Single JVM (no clustering / leader election)
-- No authentication / authorisation
-- No WebSocket streaming (yet)
-- Schema managed via `CREATE IF NOT EXISTS` (no Flyway/Liquibase)
+- No user authentication / authorization (API key / JWT)
 
 ## Future Roadmap
-1. Market Orders, IOC, FOK, Stop Orders
-2. WebSocket streaming for real-time order-book updates
-3. Flyway database migrations
-4. Distributed matching with leader election
-5. Object pooling & GC optimisation for ultra-low latency
-6. Prometheus metrics & Grafana dashboards
+1. Distributed matching with leader election & Raft replication
+2. Object pooling & GC optimization for ultra-low latency (LMAX Disruptor)
+3. Fix protocol gateway (FIX 4.2 / 4.4)
+4. User accounts, balances, and margin risk management
+

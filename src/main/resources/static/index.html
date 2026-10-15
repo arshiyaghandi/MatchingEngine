@@ -116,8 +116,8 @@
                 </button>
             </div>
 
-            <!-- Order Type Toggle: LIMIT / MARKET / IOC / FOK -->
-            <div class="grid grid-cols-4 gap-1 bg-trading-panel rounded border border-trading-border p-1 mb-6 text-xs">
+            <!-- Order Type Toggle: LIMIT / MARKET / IOC / FOK / STOP_LIMIT / STOP_MARKET -->
+            <div class="grid grid-cols-6 gap-1 bg-trading-panel rounded border border-trading-border p-1 mb-6 text-xs">
                 <button @click="orderType = 'LIMIT'" 
                         :class="['py-1 rounded font-bold transition-all text-center', orderType === 'LIMIT' ? 'bg-[#2b3139] text-white' : 'text-trading-muted hover:text-white']">
                     LIMIT
@@ -134,13 +134,32 @@
                         :class="['py-1 rounded font-bold transition-all text-center', orderType === 'FOK' ? 'bg-[#2b3139] text-white' : 'text-trading-muted hover:text-white']">
                     FOK
                 </button>
+                <button @click="orderType = 'STOP_LIMIT'" 
+                        :class="['py-1 rounded font-bold transition-all text-center', orderType === 'STOP_LIMIT' ? 'bg-[#2b3139] text-white' : 'text-trading-muted hover:text-white']">
+                    S-LMT
+                </button>
+                <button @click="orderType = 'STOP_MARKET'" 
+                        :class="['py-1 rounded font-bold transition-all text-center', orderType === 'STOP_MARKET' ? 'bg-[#2b3139] text-white' : 'text-trading-muted hover:text-white']">
+                    S-MKT
+                </button>
             </div>
             
             <div class="space-y-4">
-                <!-- Price Input (Hidden or Disabled only if MARKET) -->
-                <div v-if="orderType !== 'MARKET'" class="bg-trading-panel rounded border border-trading-border p-2 focus-within:border-trading-muted transition-colors">
+                <!-- Stop Price Input (Only for STOP_LIMIT or STOP_MARKET) -->
+                <div v-if="orderType === 'STOP_LIMIT' || orderType === 'STOP_MARKET'" class="bg-trading-panel rounded border border-trading-border p-2 focus-within:border-trading-muted transition-colors">
                     <div class="flex justify-between text-xs text-trading-muted mb-1">
-                        <span>Price</span>
+                        <span>Stop Price</span>
+                        <span>USD</span>
+                    </div>
+                    <input type="number" v-model.number="stopPrice" 
+                           class="w-full bg-transparent border-none outline-none text-white font-mono text-right" 
+                           step="0.01">
+                </div>
+
+                <!-- Price Input (Hidden or Disabled only if MARKET or STOP_MARKET) -->
+                <div v-if="orderType !== 'MARKET' && orderType !== 'STOP_MARKET'" class="bg-trading-panel rounded border border-trading-border p-2 focus-within:border-trading-muted transition-colors">
+                    <div class="flex justify-between text-xs text-trading-muted mb-1">
+                        <span>{{ orderType === 'STOP_LIMIT' ? 'Limit Price' : 'Price' }}</span>
                         <span>USD</span>
                     </div>
                     <input type="number" v-model.number="price" 
@@ -314,6 +333,7 @@
             const myOrders = ref([]);
             
             const price = ref(150.00);
+            const stopPrice = ref(150.00);
             const quantity = ref(10);
             const side = ref('BUY');
             const orderType = ref('LIMIT');
@@ -470,20 +490,34 @@
             };
 
             const submitOrder = async () => {
-                if (quantity.value <= 0 || (orderType.value === 'LIMIT' && price.value <= 0)) {
-                    showToast('Invalid price or quantity', 'error');
+                if (quantity.value <= 0) {
+                    showToast('Invalid quantity', 'error');
+                    return;
+                }
+
+                const isLimitPriceNeeded = (orderType.value === 'LIMIT' || orderType.value === 'IOC' || orderType.value === 'FOK' || orderType.value === 'STOP_LIMIT');
+                const isStopPriceNeeded = (orderType.value === 'STOP_LIMIT' || orderType.value === 'STOP_MARKET');
+
+                if (isLimitPriceNeeded && price.value <= 0) {
+                    showToast('Invalid price', 'error');
+                    return;
+                }
+                if (isStopPriceNeeded && stopPrice.value <= 0) {
+                    showToast('Invalid stop price', 'error');
                     return;
                 }
 
                 loading.value = true;
-                const fixedPrice = orderType.value === 'LIMIT' ? Math.round(price.value * 100) : 0;
+                const fixedPrice = isLimitPriceNeeded ? Math.round(price.value * 100) : 0;
+                const fixedStopPrice = isStopPriceNeeded ? Math.round(stopPrice.value * 100) : 0;
 
                 const payload = {
                     symbol: symbol.value,
                     side: side.value,
                     type: orderType.value,
                     price: fixedPrice,
-                    quantity: quantity.value
+                    quantity: quantity.value,
+                    stopPrice: fixedStopPrice
                 };
 
                 try {
@@ -497,17 +531,20 @@
                     
                     if (res.ok) {
                         const tradeCount = data.trades ? data.trades.length : 0;
-                        let msg = `<b>${side.value} ${orderType.value} Order Placed</b><br>ID: #${data.orderId} - ${data.quantity} @ ${orderType.value === 'LIMIT' ? formatPrice(fixedPrice) : 'MARKET'}`;
+                        let priceDesc = isLimitPriceNeeded ? formatPrice(fixedPrice) : 'MARKET';
+                        if (isStopPriceNeeded) priceDesc += ` (Stop: ${formatPrice(fixedStopPrice)})`;
+                        let msg = `<b>${side.value} ${orderType.value} Order Placed</b><br>ID: #${data.orderId} - ${data.quantity} @ ${priceDesc}`;
                         if (tradeCount > 0) msg += `<br><span class="text-trading-buy mt-1 inline-block">Executed ${tradeCount} trade(s)!</span>`;
                         
                         showToast(msg, 'success');
                         
-                        if (tradeCount === 0 && orderType.value === 'LIMIT') {
+                        if (tradeCount === 0 && (orderType.value === 'LIMIT' || isStopPriceNeeded)) {
                             myOrders.value.unshift({
                                 id: data.orderId,
                                 side: side.value,
                                 price: fixedPrice,
-                                qty: quantity.value
+                                qty: quantity.value,
+                                stopPrice: fixedStopPrice
                             });
                         }
                         
@@ -566,7 +603,7 @@
             return {
                 symbolInput, symbol, changeSymbol,
                 bids, asks, reversedAsks, trades, myOrders,
-                price, quantity, side, orderType, spread, maxQuantity,
+                price, stopPrice, quantity, side, orderType, spread, maxQuantity,
                 lastPrice, lastPriceUp, lastPriceColor,
                 loading, toasts,
                 formatPrice, formatTime, getDepthPercentage, setPrice,
